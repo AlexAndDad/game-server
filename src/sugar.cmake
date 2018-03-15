@@ -1,1 +1,4 @@
-sugar_files(SRC_FILES main.cpp)
+sugar_files(SRC_FILES
+        config.hpp
+        main.cpp
+        )
