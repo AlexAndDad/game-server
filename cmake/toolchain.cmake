@@ -1,0 +1,3 @@
+if (NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    set(CMAKE_TOOLCHAIN_FILE ${CMAKE_SOURCE_DIR}/polly/cxx17.cmake)
+endif ()

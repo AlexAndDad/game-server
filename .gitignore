@@ -30,3 +30,15 @@
 *.exe
 *.out
 *.app
+
+/cmake-build-*/
+/build/
+.idea/misc.xml
+.idea/modules.xml
+.idea/vcs.xml
+.idea/workspace.xml
+.idea/*.iml
+.idea/.name
+
+
+
