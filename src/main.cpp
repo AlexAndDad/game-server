@@ -25,34 +25,37 @@ struct connection
     void poke_timer()
     {
         timer_.expires_from_now(boost::posix_time::seconds(3));
-        timer_.async_wait(asio::bind_executor(strand_, [self = this->shared_from_this()](asio::error_code ec)
+        auto handler = [self = shared_from_this()](asio::error_code ec)
         {
-            if (ec == asio::error_code())
-            {
-                BOOST_LOG_TRIVIAL(info) << "connection timeout";
-                self->socket_.cancel();
-            }
-            else if (ec == asio::error::operation_aborted)
-            {
-                // nothing to do
-            }
-            else
-            {
-                BOOST_LOG_TRIVIAL(error) << "fatal timer error: " << ec.message();
-                self->socket_.cancel();
-            }
-        }));
+            self->handle_timeoout(ec);
+        };
 
+        timer_.async_wait(asio::bind_executor(strand_, handler));
+    }
+
+    void handle_timeoout(asio::error_code ec)
+    {
+        if (ec == asio::error_code())
+        {
+            BOOST_LOG_TRIVIAL(info) << "connection timeout";
+            socket_.cancel();
+        }
+        else if (ec == asio::error::operation_aborted)
+        {
+            // nothing to do
+        }
+        else
+        {
+            BOOST_LOG_TRIVIAL(error) << "fatal timer error: " << ec.message();
+            socket_.cancel();
+        }
     }
 
     void handle_read(asio::error_code ec, std::size_t bytes)
     {
         if (ec == asio::error_code())
         {
-            BOOST_LOG_TRIVIAL(info) << "got data";
-
             poke_timer();
-
             std::istream is(&this->rxbuf_);
             std::string  s;
             std::getline(is, s);
@@ -65,54 +68,57 @@ struct connection
         }
     }
 
+
     void initate_read()
     {
-        asio::async_read_until(socket_,
-                               rxbuf_,
-                               '\n',
-                               asio::bind_executor(strand_,
-                                                   [self = this->shared_from_this(), this](asio::error_code ec,
-                                                                                           std::size_t size)
-                                                   {
-                                                       this->handle_read(ec, size);
-                                                   }));
+        auto read_handler = [self = shared_from_this()](asio::error_code ec, std::size_t size)
+        {
+            self->handle_read(ec, size);
+        };
+
+        asio::async_read_until(socket_, rxbuf_, '\n', asio::bind_executor(strand_, read_handler));
     }
 
     void run()
     {
         BOOST_LOG_TRIVIAL(info) << "connection start";
-
         poke_timer();
-
         initate_read();
     }
 
 private:
 
+    // synchronises async access to this object
     asio::io_context::strand strand_;
+
+    // the client socket
     protocol::socket         socket_;
+
+    // inter-message timer
     asio::deadline_timer     timer_;
 
-    asio::streambuf rxbuf_;
+    // stream buffer for buffering text lines sent by the client
+    asio::streambuf          rxbuf_;
 };
 
 void start_accepting(protocol::acceptor& acceptor)
 {
     auto& executor = acceptor.get_io_context();
     auto connection_candidate = std::make_shared<connection>(executor);
-    acceptor.async_accept(connection_candidate->get_socket(),
-                          [connection_candidate](asio::error_code ec)
-                          {
-                              if (ec != asio::error_code())
-                              {
-                                  BOOST_LOG_TRIVIAL(info) << "acceptor error: " << ec.message();
-                              }
-                              else
-                              {
-                                  connection_candidate->run();
-                              }
+    auto accept_handler = [connection_candidate](asio::error_code ec)
+    {
+        if (ec != asio::error_code())
+        {
+            BOOST_LOG_TRIVIAL(info) << "acceptor error: " << ec.message();
+        }
+        else
+        {
+            connection_candidate->run();
+        }
 
-                          });
+    };
+
+    acceptor.async_accept(connection_candidate->get_socket(), accept_handler);
 }
 
 int main(int argc, const char **argv)
