@@ -17,7 +17,7 @@ HunterGate(
 
 project(GameServer)
 
-hunter_add_package(Sugar)
+hunter_add_package(sugar)
 find_package(sugar CONFIG REQUIRED)
 
 sugar_include(src)
