@@ -108,7 +108,12 @@ namespace game {
         auto accept_handler       = [connection_candidate](asio::error_code ec)
         {
             if (is_error(ec)) {
-                BOOST_LOG_TRIVIAL(info) << "acceptor error: " << ec.message();
+                if (ec == asio::error::operation_aborted) {
+                    BOOST_LOG_TRIVIAL(info) << "aborting accept";
+                }
+                else {
+                    BOOST_LOG_TRIVIAL(error) << "acceptor error: " << ec.message();
+                }
             }
             else {
                 connection_candidate->run();
@@ -132,6 +137,20 @@ int main(int argc, const char **argv)
     acceptor.bind(server_endpoint);
     acceptor.listen();
     start_accepting(acceptor);
+
+    asio::signal_set signals(executor);
+    signals.add(SIGINT);
+    signals.async_wait([&](asio::error_code ec, int sig)
+                       {
+                           if (sig == SIGINT) {
+                               BOOST_LOG_TRIVIAL(info) << "SIGINT received";
+                           }
+                           else {
+                               BOOST_LOG_TRIVIAL(error) << "unexpected signal: " << sig;
+                           }
+                           acceptor.cancel();
+                       });
+
 
     executor.run();
 
