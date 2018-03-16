@@ -5,4 +5,5 @@
 ```bash
 telnet localhost 4000
 ```
-
+#How to quit
+1. Ctrl + c
