@@ -1,0 +1,8 @@
+//
+// Created by rhodges on 16/03/18.
+//
+
+#ifndef GAMESERVER_CONNECTION_HPP
+#define GAMESERVER_CONNECTION_HPP
+
+#endif //GAMESERVER_CONNECTION_HPP
