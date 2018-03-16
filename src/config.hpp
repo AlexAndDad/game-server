@@ -10,10 +10,13 @@
 #include <boost/system/error_code.hpp>
 #include <boost/log/trivial.hpp>
 
-namespace asio
+namespace game
 {
-    using namespace boost::asio;
-    using error_code = boost::system::error_code;
+    namespace asio
+    {
+        using namespace boost::asio;
+        using error_code = boost::system::error_code;
+    }
 }
 
 

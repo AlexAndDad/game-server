@@ -3,126 +3,126 @@
 //
 
 #include "config.hpp"
+#include "error_code.hpp"
+
 #include <memory>
 #include <istream>
 
 
-using protocol = asio::ip::tcp;
+namespace game {
 
-struct connection
-    : std::enable_shared_from_this<connection>
-{
-    connection(asio::io_context& executor)
-        : strand_(executor)
-        , socket_(executor)
-        , timer_(executor)
+    using protocol = asio::ip::tcp;
+
+    struct connection
+        : std::enable_shared_from_this<connection>
     {
-
-    }
-
-    auto get_socket() -> protocol::socket& { return socket_; }
-
-    void poke_timer()
-    {
-        timer_.expires_from_now(boost::posix_time::seconds(3));
-        auto handler = [self = shared_from_this()](asio::error_code ec)
+        connection(asio::io_context& executor)
+            : strand_(executor)
+            , socket_(executor)
+            , timer_(executor)
         {
-            self->handle_timeoout(ec);
-        };
 
-        timer_.async_wait(asio::bind_executor(strand_, handler));
-    }
-
-    void handle_timeoout(asio::error_code ec)
-    {
-        if (ec == asio::error_code())
-        {
-            BOOST_LOG_TRIVIAL(info) << "connection timeout";
-            socket_.cancel();
         }
-        else if (ec == asio::error::operation_aborted)
-        {
-            // nothing to do
-        }
-        else
-        {
-            BOOST_LOG_TRIVIAL(error) << "fatal timer error: " << ec.message();
-            socket_.cancel();
-        }
-    }
 
-    void handle_read(asio::error_code ec, std::size_t bytes)
-    {
-        if (ec == asio::error_code())
+        auto get_socket() -> protocol::socket& { return socket_; }
+
+        void poke_timer()
         {
+            timer_.expires_from_now(boost::posix_time::seconds(3));
+            auto handler = [self = shared_from_this()](asio::error_code ec)
+            {
+                self->handle_timeoout(ec);
+            };
+
+            timer_.async_wait(asio::bind_executor(strand_, handler));
+        }
+
+        void handle_timeoout(asio::error_code ec)
+        {
+            if (is_error(ec)) {
+                if (ec == asio::error::operation_aborted) {
+                    // do nothing - this is because we extended the timer
+                }
+                else {
+                    BOOST_LOG_TRIVIAL(error) << "fatal timer error: " << ec.message();
+                    socket_.cancel();
+                }
+            }
+            else {
+                BOOST_LOG_TRIVIAL(info) << "connection timeout";
+                socket_.cancel();
+            }
+        }
+
+        void handle_read(asio::error_code ec, std::size_t bytes)
+        {
+            if (is_error(ec)) {
+                BOOST_LOG_TRIVIAL(error) << "read error: " << ec.message();
+            }
+            else {
+                poke_timer();
+                std::istream is(&this->rxbuf_);
+                std::string  s;
+                std::getline(is, s);
+                BOOST_LOG_TRIVIAL(info) << "received: " << s;
+                initate_read();
+            }
+        }
+
+        void initate_read()
+        {
+            auto read_handler = [self = shared_from_this()](asio::error_code ec, std::size_t size)
+            {
+                self->handle_read(ec, size);
+            };
+
+            asio::async_read_until(socket_, rxbuf_, '\n', asio::bind_executor(strand_, read_handler));
+        }
+
+        void run()
+        {
+            BOOST_LOG_TRIVIAL(info) << "connection start";
             poke_timer();
-            std::istream is(&this->rxbuf_);
-            std::string  s;
-            std::getline(is, s);
-            BOOST_LOG_TRIVIAL(info) << "received: " << s;
             initate_read();
         }
-        else
-        {
-            BOOST_LOG_TRIVIAL(error) << "read error: " << ec.message();
-        }
-    }
 
+    private:
 
-    void initate_read()
-    {
-        auto read_handler = [self = shared_from_this()](asio::error_code ec, std::size_t size)
-        {
-            self->handle_read(ec, size);
-        };
+        // synchronises async access to this object
+        asio::io_context::strand strand_;
 
-        asio::async_read_until(socket_, rxbuf_, '\n', asio::bind_executor(strand_, read_handler));
-    }
+        // the client socket
+        protocol::socket socket_;
 
-    void run()
-    {
-        BOOST_LOG_TRIVIAL(info) << "connection start";
-        poke_timer();
-        initate_read();
-    }
+        // inter-message timer
+        asio::deadline_timer timer_;
 
-private:
-
-    // synchronises async access to this object
-    asio::io_context::strand strand_;
-
-    // the client socket
-    protocol::socket         socket_;
-
-    // inter-message timer
-    asio::deadline_timer     timer_;
-
-    // stream buffer for buffering text lines sent by the client
-    asio::streambuf          rxbuf_;
-};
-
-void start_accepting(protocol::acceptor& acceptor)
-{
-    auto& executor = acceptor.get_io_context();
-    auto connection_candidate = std::make_shared<connection>(executor);
-    auto accept_handler = [connection_candidate](asio::error_code ec)
-    {
-        if (ec != asio::error_code())
-        {
-            BOOST_LOG_TRIVIAL(info) << "acceptor error: " << ec.message();
-        }
-        else
-        {
-            connection_candidate->run();
-        }
-
+        // stream buffer for buffering text lines sent by the client
+        asio::streambuf rxbuf_;
     };
 
-    acceptor.async_accept(connection_candidate->get_socket(), accept_handler);
+    void start_accepting(protocol::acceptor& acceptor)
+    {
+        auto& executor = acceptor.get_io_context();
+        auto connection_candidate = std::make_shared<connection>(executor);
+        auto accept_handler       = [connection_candidate](asio::error_code ec)
+        {
+            if (is_error(ec)) {
+                BOOST_LOG_TRIVIAL(info) << "acceptor error: " << ec.message();
+            }
+            else {
+                connection_candidate->run();
+            }
+
+        };
+
+        acceptor.async_accept(connection_candidate->get_socket(), accept_handler);
+    }
 }
 
 int main(int argc, const char **argv)
 {
+    using namespace game;
     BOOST_LOG_TRIVIAL(info) << "program start";
 
     asio::io_context   executor;
