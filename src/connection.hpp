@@ -7,90 +7,65 @@
 #include "error_code.hpp"
 #include "connection_settings.hpp"
 
-namespace game
-{
+namespace game {
 
+    /// An object which represents a connection by a client.
+    /// Objects of this type are designed to be owned by a shared_ptr, as once the start() method has been called,
+    /// the object will take shared references to itself while awaiting execution of async completion handlers.
+    /// In order to destroy a connection, call cancel() on it. It will be destroyed prior to the owning
+    /// executor entering the stopped() state,
     struct connection
-            : std::enable_shared_from_this<connection> {
+        : std::enable_shared_from_this<connection>
+    {
 
         using protocol = client_connection_protocol;
 
-        connection(asio::io_context &executor)
-                : strand_(executor), socket_(executor), timer_(executor) {
+        /// Create a shared_ptr to a connection with the given deleter.
+        /// @tparam Deleter is an object which is responsible for deleting the connection at final release.
+        /// @param owner is a reference to an io_context on which all async connection operations shall complete.
+        /// @param deleter is the deleter which will destroy the connection
+        /// @return std::shared_ptr<connection>
+        /// @note the returned connection has not been started.
+        template<class Deleter>
+        static auto create_shared(asio::io_context &owner, Deleter &&deleter) -> std::shared_ptr<connection>;
 
-        }
 
         auto get_socket() -> protocol::socket & { return socket_; }
 
-        void poke_timer() {
-            if (settings_.should_timeout()) {
-                timer_.expires_from_now(boost::posix_time::seconds(3));
-                auto handler = [self = shared_from_this()](asio::error_code ec)
-                {
-                    self->handle_timeoout(ec);
-                };
 
-                timer_.async_wait(asio::bind_executor(strand_, handler));
-            }
-        }
+        /// Post a notification to the connection that it should start operating.
+        /// @pre the connection is not started
+        void start(connection_settings settings);
 
-        void handle_timeoout(asio::error_code ec) {
-            if (is_error(ec)) {
-                if (ec == asio::error::operation_aborted) {
-                    // do nothing - this is because we extended the timer
-                } else {
-                    BOOST_LOG_TRIVIAL(error) << "fatal timer error: " << ec.message();
-                    socket_.cancel();
-                }
-            } else {
-                BOOST_LOG_TRIVIAL(info) << "connection timeout";
-                socket_.cancel();
-            }
-        }
-
-        void handle_read(asio::error_code ec, std::size_t bytes) {
-            if (is_error(ec)) {
-                BOOST_LOG_TRIVIAL(error) << "read error: " << ec.message();
-            } else {
-                poke_timer();
-                std::istream is(&this->rxbuf_);
-                std::string s;
-                std::getline(is, s);
-                BOOST_LOG_TRIVIAL(info) << "received: " << s;
-                initate_read();
-            }
-        }
-
-        void initate_read() {
-            auto read_handler = [self = shared_from_this()](asio::error_code ec, std::size_t size) {
-                self->handle_read(ec, size);
-            };
-
-            asio::async_read_until(socket_, rxbuf_, '\n', asio::bind_executor(strand_, read_handler));
-        }
-
-        void run(connection_settings settings) {
-            settings_ = settings;
-            BOOST_LOG_TRIVIAL(info) << "connection start with settings: " << settings_;
-            poke_timer();
-            initate_read();
-        }
-
-        void notify_cancel()
-        {
-            strand_.post([self = shared_from_this()]
-                         {
-                             self->handle_cancel();
-                         });
-        }
+        /// Post a notification to the that the connection should cancel all async operations
+        void notify_cancel();
 
     private:
-        void handle_cancel()
-        {
-            BOOST_LOG_TRIVIAL(info) << "connection cancelled - shutting down";
-            timer_.cancel();
-            socket_.cancel();
-        }
+        /// Construct a connection
+        /// @param owner is a reference to an io_context, which must outlive the connection.
+        /// @note the constructor is private, forcing construction through the static creation function.
+        /// @see connection::create()
+        connection(asio::io_context &owner);
+
+        /// Actions the cancel event in the context of the strand
+        /// @pre executed from within strand_
+        void handle_cancel();
+
+        void poke_timer();
+
+        void handle_timeoout(asio::error_code ec);
+
+        void handle_read(asio::error_code ec, std::size_t bytes);
+
+        void initate_read();
+
+        /// Return a bound handler bound to this object's strand.
+        /// @param handler is the handler to wrap
+        /// @tparam is the type of the handler, which is deduced.
+        /// @return the result of calling asio::bind_executor, which is a specialisation of asio::executor_binder<>
+        ///
+        template<class Handler>
+        auto wrap(Handler &&handler);
 
     private:
 
@@ -108,5 +83,25 @@ namespace game
 
         connection_settings settings_;
     };
+
+    // implementation
+
+    template<class Deleter>
+    auto connection::create_shared(asio::io_context &owner, Deleter &&deleter) -> std::shared_ptr<connection>
+    {
+        return std::shared_ptr<connection>(new connection(owner), std::forward<Deleter>(deleter));
+    }
+
+    template<class Handler>
+    auto connection::wrap(Handler &&handler)
+    {
+        return asio::bind_executor(strand_,
+                                   [self = shared_from_this(), handler = std::forward<Handler>(handler)]
+                                       (auto &&...args)
+                                   {
+                                       std::invoke(handler, std::forward<decltype(args)>(args)...);
+                                   });
+    }
+
 
 }

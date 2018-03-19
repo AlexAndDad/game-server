@@ -13,28 +13,14 @@ namespace game {
     {
         using protocol = client_connection_protocol;
 
-        connection_manager(asio::io_context &executor)
-            : strand_(executor)
-            , acceptor_(executor)
-            , comms_timeout_(0ms)
-        {
+        connection_manager(asio::io_context &executor);
 
-        }
-
-        void start()
-        {
-            acceptor_.open(protocol::v4());
-            acceptor_.set_option(protocol::socket::reuse_address());
-            auto server_endpoint = protocol::endpoint(asio::ip::address_v4(0), 4000);
-            acceptor_.bind(server_endpoint);
-            acceptor_.listen();
-            start_accepting();
-        }
+        void start();
 
         void cancel()
         {
             acceptor_.cancel();
-            strand_.dispatch([this]{ this->cancel_connections(); });
+            strand_.dispatch([this] { this->cancel_connections(); });
         }
 
         template<class Handler>
@@ -45,23 +31,21 @@ namespace game {
 
         struct connection_deleter
         {
-            connection_deleter(connection_manager& manager) : manager_(manager) {}
+            connection_deleter(connection_manager &manager) : manager_(manager) {}
 
-            void operator()(connection* pconn) const noexcept
+            void operator()(connection *pconn) const noexcept
             {
                 manager_.notify_connection_deleted(pconn);
                 delete pconn;
             }
 
-            connection_manager& manager_;
+            connection_manager &manager_;
         };
 
         void start_accepting()
         {
             auto &executor = get_executor();
-            auto unique_connection = std::unique_ptr<connection, connection_deleter>(nullptr, connection_deleter(*this));
-            unique_connection.reset(new connection(executor));
-            auto connection_candidate = std::shared_ptr<connection>(std::move(unique_connection));
+            auto connection_candidate = connection::create_shared(executor, connection_deleter(*this));
             auto accept_handler = [this, connection_candidate](asio::error_code ec)
             {
                 if (is_error(ec)) {
@@ -72,7 +56,7 @@ namespace game {
                     }
                 } else {
                     this->notify_connected(connection_candidate);
-                    connection_candidate->run(make_connection_settings());
+                    connection_candidate->start(make_connection_settings());
                     this->start_accepting();
                 }
             };
@@ -85,7 +69,7 @@ namespace game {
             return strand_.get_io_context();
         }
 
-        using connection_handle = connection*;
+        using connection_handle = connection *;
 
         void notify_connection_deleted(connection_handle handle)
         {
@@ -94,7 +78,7 @@ namespace game {
 
     private:
 
-        void notify_connected(std::shared_ptr<connection> const& ptr)
+        void notify_connected(std::shared_ptr<connection> const &ptr)
         {
             assert(strand_.running_in_this_thread());
             connections_.emplace(ptr.get(), ptr);
@@ -117,20 +101,16 @@ namespace game {
             assert(strand_.running_in_this_thread());
             std::vector<std::shared_ptr<connection>> active_connections;
             active_connections.reserve(connections_.size());
-            for (auto&& cache_entry : connections_)
-            {
-                if (auto p = cache_entry.second.lock())
-                {
+            for (auto &&cache_entry : connections_) {
+                if (auto p = cache_entry.second.lock()) {
                     active_connections.push_back(std::move(p));
                 }
             }
 
-            for (auto && p : active_connections)
-            {
+            for (auto &&p : active_connections) {
                 p->notify_cancel();
             }
         }
-
 
 
     private:
@@ -144,3 +124,64 @@ namespace game {
         connection_cache connections_;
     };
 }
+
+
+/*
+#include <thread>
+
+std::string read_line_with_timeout(boost::asio::ip::tcp::socket &sock, boost::asio::streambuf &buf)
+{
+    namespace asio =  boost::asio;
+
+    // these statics could of course be encapsulated into a service object
+    static asio::io_context executor;
+    static asio::io_context::work work(executor);
+    static std::thread mythread{[&] { executor.start(); }};
+
+    auto temp_socket = asio::generic::stream_protocol::socket(executor,
+                                                              sock.local_endpoint().protocol(),
+                                                              dup(sock.native_handle()));
+    auto timer = asio::deadline_timer(executor, boost::posix_time::milliseconds(3000));
+
+    std::condition_variable cv;
+    std::mutex m;
+
+    int done_count = 0;
+    boost::system::error_code err;
+
+    auto get_lock = [&] { return std::unique_lock<std::mutex>(m); };
+
+    auto aborted = [](boost::system::error_code const &ec) { return ec == boost::asio::error::operation_aborted; };
+
+    auto common_handler = [&](auto ec)
+    {
+        if (not aborted(ec))
+        {
+            auto lock = get_lock();
+            if (done_count++ == 0) {
+                err = ec;
+                boost::system::error_code sink;
+                temp_socket.cancel(sink);
+                timer.cancel(sink);
+            }
+            lock.unlock();
+            cv.notify_one();
+        }
+    };
+
+    async_read_until(temp_socket, buf, '\n', [&](auto ec, auto&&...) { common_handler(ec); });
+    timer.async_wait([&](auto ec)
+                     {
+                         common_handler(ec ? ec : asio::error::timed_out);
+                     });
+
+    auto lock = get_lock();
+    cv.wait(lock, [&] { return done_count == 2; });
+
+    if (err) throw boost::system::system_error(err);
+    std::istream is(&buf);
+    std::string result;
+    std::getline(is, result);
+    return result;
+}
+*/
