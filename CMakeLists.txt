@@ -1,11 +1,9 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.9)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake)
 
 include(toolchain)
 include(HunterGate)
-
-set(CMAKE_CXX_STANDARD 17)
 
 message(STATUS "[project] CMAKE_TOOLCHAIN_FILE: ${CMAKE_TOOLCHAIN_FILE}")
 
@@ -24,6 +22,5 @@ sugar_include(src)
 add_executable(game-server ${SRC_FILES})
 target_include_directories(game-server PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-hunter_add_package(Boost COMPONENTS system log filesystem thread)
-find_package(Boost REQUIRED CONFIG COMPONENTS system log filesystem thread)
-target_link_libraries(game-server PRIVATE Boost::boost Boost::system Boost::log Boost::filesystem Boost::thread)
+include(AddBoost)
+AddBoost(game-server COMPONENTS system log thread)
